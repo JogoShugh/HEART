@@ -1,31 +1,70 @@
 # HEART: Hypermedia Enforced Actions for Reliable Transactions
-## An Architectural Manifesto for the Agent-to-Agent (A2A) Economy
+## An Architectural Manifesto for the Autonomous Transaction Economy
 
-In the rapidly evolving landscape of Agentic AI, the industry has hit a wall: **The Hallucination Gap**. While Large Language Models (LLMs) are exceptional at reasoning, they are inherently probabilistic. When an agent is tasked with navigating a complex business system, it often "guesses" the next step, attempts invalid state transitions, or submits malformed data based on stale documentation.
+In the rapidly evolving landscape of AI, we have hit the **Hallucination Gap**. Whether it is an AI agent calling an API (**A2A**) or a human commanding an agent (**H2A**), the link between "intent" and "execution" is brittle. 
 
-**HEART** (Hypermedia Enforced Actions for Reliable Transactions) is a corrective architecture. It posits that for an agent to be truly autonomous and reliable, its "intelligence" must be constrained by the **Server’s State**. 
-
-By utilizing **HAL-Forms**, HEART transforms the API from a passive data source into a **Dynamic State Machine** that physically enforces the boundaries of what an agent can and cannot do.
+**HEART** is a corrective architecture. By utilizing **HAL-Forms**, HEART transforms APIs into **Dynamic State Machines** that physically enforce the boundaries of every interaction across A2A, H2A, and **A2H** (Agent-to-Human) workflows.
 
 ---
 
-## The Core Problem: Brittle Autonomy
-Traditional "Agentic" workflows rely on giving an LLM a massive OpenAPI/Swagger definition and a prompt. This is a recipe for failure:
-* **Out-of-Sync State:** The agent tries to "Cancel" an order that has already "Shipped."
-* **Schema Guessing:** The agent misses a mandatory field or uses the wrong data type.
-* **Tight Coupling:** The agent is hardcoded to specific URLs, breaking the moment the API evolves.
+## 1. Agent-to-Agent (A2A): Deterministic Autonomy
+In a decentralized economy, agents must collaborate without shared codebases. 
+* **The Problem:** Agents "guess" payloads based on stale documentation.
+* **The HEART Solution:** The server provides `_templates` that dictate the exact schema required for the next state transition. If an action isn't in the template, it is logically impossible for the agent to execute.
 
-## The Solution: HEART via HAL-Forms
-HEART utilizes the **HAL-Forms** specification to provide a "Nervous System" for the agent. Instead of the agent deciding what is possible, the server provides a set of `_templates` that define the only valid actions available in the current context.
+## 2. Human-to-Agent (H2A): Intent-to-Action Mapping
+HEART allows humans to interact with complex systems using natural language without the risk of the agent "going rogue."
+* **The AGENTS.md Layer:** A generic agent is taught how to interact with a HEART system via an `AGENTS.md` file. This file provides the "meta-skill" instructions: *"Always parse HAL-Forms templates to resolve user intents into valid state transitions."*
+* **Reliable Execution:** When a user says, *"Harvest the tomatoes,"* the agent doesn't guess the endpoint. It locates the `harvest` template in the current resource and maps the user's intent to the strictly required fields.
 
-### The HEART Principles
+## 3. Agent-to-Human (A2H): Dynamic UI & Communication
+HEART enables agents to bridge the gap back to the user with functional precision.
+* **Natural Translation:** A generic agent can take a technical HAL link and rephrase it: *"The tomatoes are mature; would you like me to record a harvest for you?"*
+* **Dynamic UI Rendering:** Because HAL-Forms provide metadata (types, prompts, options, and requirements), a generic agent can **dynamically render UI fields** on the fly. If a `_templates` element requires a field, the agent knows exactly what to ask the human.
+
+---
+
+## The HEART Principles
 
 | Principle | Technical Implementation |
 | :--- | :--- |
-| **Atomic Actions** | Every business process is broken down into discrete, self-describing HAL-Form templates. |
-| **State-as-a-Guardrail** | If the action is not in the `_templates` block, it is logically impossible for the agent to execute. |
-| **Schema Injection** | The server provides the exact field requirements (types, options, regex) inside the form, eliminating "hallucinated" payloads. |
-| **A2A Decentralization** | Agents only need to understand the **HAL-Forms media type**, allowing them to work across any HEART-compliant system (e.g., StarbornAg). |
+| **Atomic Actions** | Business processes are discrete, self-describing HAL-Form templates. |
+| **State-as-a-Guardrail** | Transitions are only valid if provided in the current `_templates` block. |
+| **Schema Injection** | The server dictates field requirements and types, eliminating "hallucinated" payloads. |
+| **Enforced Requirements** | Strict use of `required: true` in templates to ensure transactional integrity. |
+
+---
+
+## Technical Proof of Concept (StarbornAg)
+
+A human tells the agent: *"I just picked 5kg of tomatoes."* The agent GETs the crop status:
+
+```json
+{
+  "status": "MATURE",
+  "_templates": {
+    "harvest": {
+      "title": "Record Harvest",
+      "method": "POST",
+      "target": "/api/crops/tomato-04/harvest",
+      "properties": [
+        { 
+          "name": "yield_kg", 
+          "type": "number", 
+          "required": true, 
+          "prompt": "Weight in kg" 
+        },
+        { 
+          "name": "quality", 
+          "type": "text", 
+          "required": true, 
+          "options": { "inline": ["A", "B"] } 
+        }
+      ]
+    }
+  }
+}
+
 
 ---
 
@@ -70,8 +109,15 @@ Content-Type: application/prs.hal-forms+json
 }
 ```
 
-### The Vision: Beyond Centralized Control
+**The A2H/H2A Flow:**
+1. **Agent identifies** that `quality` is `required: true` but missing from the user's statement.
+2. **Agent renders UI/Asks:** "Great! I need to know the quality grade to finish the record. Was it Grade A or Grade B?"
+3. **User responds:** "Grade A."
+4. **Agent executes** the POST with 100% deterministic accuracy because the schema was enforced.
 
-​HEART is the exit strategy from proprietary, centralized "Intelligence Clouds." By making the web itself the platform for reliable transactions, we enable a future where independent agents—be they for agriculture, finance, or logistics—can collaborate with 100% deterministic reliability.
+---
 
-​HEART is currently being incubated within the StarbornAg project. It is the blueprint for a web where actions aren't just suggested—they are enforced.
+## The Vision: The End of Proprietary Silos
+HEART is the exit strategy from proprietary "Intelligence Clouds." By making the web itself the platform for reliable transactions, we enable a future where humans and agents collaborate with absolute certainty.
+
+**HEART is currently being incubated within the StarbornAg project.**
