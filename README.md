@@ -1,6 +1,6 @@
-# Product Requirements Document
-## H.E.A.R.T. + R.I.S.E. Protocol Suite
-### With ARTIE Reference Client Implementation
+
+# H.E.A.R.T. + R.I.S.E. Protocol Suite
+## With ARTIE Reference Client Implementation
 
 **Version:** 0.1 — Working Draft  
 **Status:** Pre-implementation  
