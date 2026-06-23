@@ -1,11 +1,10 @@
+import heart.HeartSchemaValidator
+import heart.HeartTool
 import org.junit.jupiter.api.Test
 import kotlinx.serialization.json.*
-import java.net.http.HttpClient
 import kotlin.test.assertEquals
 
 class HeartToolFactoryTests {
-    private val factory = HeartToolFactory(HttpClient.newHttpClient())
-
     @Test
     fun `factory creates sowSeed tool descriptor with correct parameters`() {
         // Setup schema for sowSeed
@@ -21,7 +20,7 @@ class HeartToolFactoryTests {
             }
         }
 
-        val tool = factory.createTool("sowSeed", "POST", "http://api/sowSeed", schema)
+        val tool = HeartTool("sowSeed", schema, HeartSchemaValidator())
 
         // Verify Descriptor
         assertEquals("sowSeed", tool.descriptor.name)
