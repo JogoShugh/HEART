@@ -14,14 +14,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-class ColdStartResponseSteps {
+class MediaTypeSteps {
 
     private val yamlMapper = ObjectMapper(YAMLFactory())
     private val jsonMapper = ObjectMapper()
+    private val fakeTransport = FakeTransport()
+    private val client: HeartRiseClient = ArtieClient(fakeTransport)
 
     private var responseBody = ""
     private var contentType = ""
-    private lateinit var parsed: HeartResponse
+    private lateinit var current: HeartRepresentation
 
     @Given("the following cold-start HAL response:")
     fun givenResponse(body: String) {
@@ -35,12 +37,13 @@ class ColdStartResponseSteps {
 
     @When("the client parses the response")
     fun whenClientParses() {
-        parsed = HeartResponseParser.parse(responseBody, contentType)
+        fakeTransport.enqueue(responseBody, contentType)
+        current = client.enter("https://example.com/")
     }
 
     @Then("the {string} affordance has:")
     fun thenAffordanceHas(rel: String, fields: List<AffordanceFields>) {
-        val form = parsed.forms[rel] ?: error("No affordance with rel '$rel'")
+        val form = current.affordance(rel) ?: error("No affordance with rel '$rel'")
         val expected = fields.single()
         assertEquals(expected.href, form.href)
         assertEquals(expected.hash, form.hash)
@@ -48,7 +51,7 @@ class ColdStartResponseSteps {
 
     @Then("the {string} field in the {string} schema has the {string} keyword")
     fun thenSchemaFieldHasKeyword(property: String, rel: String, keyword: String) {
-        val form = parsed.forms[rel] ?: error("No affordance with rel '$rel'")
+        val form = current.affordance(rel) ?: error("No affordance with rel '$rel'")
         val props = form.schema[PROPERTIES]?.jsonObject ?: error("Schema for '$rel' has no '$PROPERTIES'")
         val prop = props[property]?.jsonObject ?: error("No property '$property' in '$rel' schema")
         assertTrue(prop.containsKey(keyword), "Expected keyword '$keyword' on property '$property'")
@@ -56,7 +59,7 @@ class ColdStartResponseSteps {
 
     @Then("the {string} schema marks {string} as required")
     fun thenSchemaMarksRequired(rel: String, field: String) {
-        val form = parsed.forms[rel] ?: error("No affordance with rel '$rel'")
+        val form = current.affordance(rel) ?: error("No affordance with rel '$rel'")
         val requiredFields = form.schema[REQUIRED]?.jsonArray?.map { it.jsonPrimitive.content }
             ?: error("Schema for '$rel' has no '$REQUIRED' array")
         assertTrue(requiredFields.contains(field), "Expected '$field' in '$REQUIRED' for '$rel'")
@@ -65,7 +68,7 @@ class ColdStartResponseSteps {
     @Then("the resource state contains:")
     fun thenResourceStateContains(entries: List<StateEntry>) {
         entries.forEach { (key, expected) ->
-            val actual = parsed.state[key]?.jsonPrimitive?.content
+            val actual = current.state[key]?.jsonPrimitive?.content
                 ?: error("Resource state missing key '$key'")
             assertEquals(expected, actual)
         }
@@ -73,6 +76,6 @@ class ColdStartResponseSteps {
 
     @And("the resource state does not contain the key {string}")
     fun thenResourceStateDoesNotContain(key: String) {
-        assertFalse(parsed.state.containsKey(key), "Resource state should not contain '$key'")
+        assertFalse(current.state.containsKey(key), "Resource state should not contain '$key'")
     }
 }
