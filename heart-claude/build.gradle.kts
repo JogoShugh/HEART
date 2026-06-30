@@ -22,6 +22,7 @@ dependencies {
     testImplementation("org.junit.platform:junit-platform-suite:1.11.0")
     testImplementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.17.0")
     testImplementation(kotlin("reflect"))
+    testImplementation("io.cucumber:cucumber-picocontainer:$cucumberVersion")
 }
 
 tasks.test {

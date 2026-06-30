@@ -8,6 +8,7 @@ Feature: Cold-start response parsing
       _forms:
         update:
           href: https://example.com/items/1
+          method: POST
           hash: abc123def456
           _schema:
             type: object

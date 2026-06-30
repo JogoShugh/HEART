@@ -11,6 +11,8 @@ class ArtieClient(private val transport: Transport) : HeartRiseClient {
     }
 
     override fun act(rel: String, payload: JsonObject): HeartRepresentation {
-        TODO("Implemented in act slice")
+        val form = current?.affordance(rel) ?: error("No affordance '$rel' in current manifest")
+        val (body, contentType) = transport.submit(form.href, form.method, payload)
+        return HeartResponseParser.parse(body, contentType).also { current = it }
     }
 }

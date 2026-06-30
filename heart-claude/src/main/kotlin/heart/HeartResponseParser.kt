@@ -18,6 +18,8 @@ object HeartResponseParser {
                 rel = rel,
                 href = obj[HREF]?.jsonPrimitive?.content
                     ?: error("Affordance '$rel' missing '$HREF'"),
+                method = obj[METHOD]?.jsonPrimitive?.content
+                    ?: error("Affordance '$rel' missing '$METHOD'"),
                 hash = obj[HASH]?.jsonPrimitive?.content
                     ?: error("Affordance '$rel' missing '$HASH'"),
                 schema = obj[SCHEMA]?.jsonObject

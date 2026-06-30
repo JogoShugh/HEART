@@ -11,7 +11,14 @@ class TableTypeConfig {
         val ctor = klass.primaryConstructor
             ?: error("${klass.simpleName} needs a primary constructor")
         val args = ctor.parameters.associateWith { p ->
-            entry[p.name] ?: error("DataTable row missing '${p.name}' column")
+            val raw = entry[p.name] ?: error("DataTable row missing '${p.name}' column")
+            when (p.type.classifier) {
+                Boolean::class -> raw.toBoolean()
+                Int::class -> raw.toInt()
+                Long::class -> raw.toLong()
+                Double::class -> raw.toDouble()
+                else -> raw
+            }
         }
         return ctor.callBy(args)
     }
