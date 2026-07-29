@@ -1,498 +1,478 @@
-# H.E.A.R.T. + R.I.S.E. Protocol Suite
-## With ARTIE Reference Client Implementation
+# H.E.A.R.T. + R.I.S.E. Protocol Suite — v0.3
 
-**Version:** 0.2 — Working Draft  
-**Status:** Pre-implementation  
-**Author:** Joshua Gough  
-**Date:** June 2026
+## 0. Status of this document
 
----
+This supersedes v0.2. Where the two disagree, this document is
+authoritative. Section 0.1 summarizes what changed and why — read it
+before assuming any behavior from a v0.2-era implementation still
+holds.
 
-## 1. Executive Summary
+v0.2 specified a **fat-prompt** client: nearly everything — sync
+mechanics, hash comparison, HTTP handling, RISE envelope plumbing — ran
+as LLM-mediated reasoning, with the explicit stated intent that this
+was scaffolding, not the target architecture. v0.3 is the client that
+scaffolding was building toward: **inference earns its way into exactly
+one step.**
 
-This document defines the requirements for the H.E.A.R.T. (Hypermedia Enforced Agentic Reliable Transactions) and R.I.S.E. (Reciprocal Interface for State Exchange) protocol suite, together with ARTIE (Autonomous Restful Traversal and Interactive Engine), the reference client implementation.
+### 0.1 Changelog from v0.2
 
-The suite addresses a fundamental architectural failure in the current agentic AI landscape: the use of large language models as deterministic routers over tightly coupled, out-of-band schema definitions. This approach produces systems that are expensive to operate, brittle under server evolution, and prone to hallucination. H.E.A.R.T. and R.I.S.E. correct this by applying Roy Fielding's REST constraints — specifically the uniform interface and hypermedia as the engine of application state — to agent-to-system and system-to-system integration.
-
-The result is a protocol suite that reduces per-turn token cost, eliminates a primary class of agent hallucination, and enables server-side evolution without client redeployment.
-
----
-
-## 2. Vision
-
-A generic agent — one carrying no domain-specific knowledge — enters a system with a single URI and a known media type. The server responds with the current state of the world and the complete map of what is permitted right now. The agent reasons over that map, maps user intent to available affordances, and executes a transaction constrained entirely by the server-provided schema. The context window remains flat. The token cost is predictable and minimal. The server can evolve freely. The agent adapts at the next sync cycle.
-
-The same agent, without code changes, can interact with a garden management system, a basketball scoring system, an insurance claims system, or any other domain — because the agent is coupled to the media type, not to the domain.
-
-This is the web's original design applied to the agentic era.
-
----
-
-## 3. Problem Statement
-
-### 3.1 The Current State
-
-Agentic AI systems in 2026 are overwhelmingly built on one of two patterns:
-
-**Pattern A — OpenAPI tool calling.** The agent is provided with an API schema before any interaction with the server. The schema lives in the system prompt or in a tool definition file. The agent constructs requests from this prior knowledge. When the server evolves, the schema must be updated, the agent redeployed, and the context window reloaded. Token cost is high and fixed regardless of what the agent actually needs to do.
-
-**Pattern B — MCP tool manifests.** A marginal improvement that makes tool definitions machine-readable but retains the fundamental coupling. Tool definitions are still out-of-band. The agent still knows what it can do before it asks the server. The server still cannot evolve without breaking the client.
-
-Both patterns share a root cause: the client carries knowledge of the server's interface rather than discovering it at runtime from the server's responses. This is what Roy Fielding identified in 2008 as the defining failure of so-called REST APIs. It remains unaddressed in the agentic context.
-
-### 3.2 The Consequences
-
-**Token cost.** A 50,000-token OpenAPI spec loaded into every agent context window at every session is a fixed tax. Multiply by request volume and the cost is significant. The spec is loaded whether the agent uses ten endpoints or one.
-
-**Hallucination.** When the agent constructs requests from prior schema knowledge rather than server-provided affordances, it operates on potentially stale information. Field names change. Endpoints move. Business rules evolve. The agent does not know. It guesses. It constructs plausible-but-invalid requests.
-
-**Brittleness.** Server evolution requires client redeployment. This creates coordination overhead, versioning complexity, and the inevitable breaking changes that consume engineering time and create instability.
-
-**Context rot.** Conversation history accumulates across turns. The context window fills with stale state. Reasoning quality degrades. Cost increases.
-
-### 3.3 The Root Cause
-
-Fielding named it in 2008: if the engine of application state is not being driven by hypertext then it cannot be RESTful. The industry built APIs that are not RESTful in this sense. It then built agents on top of those APIs and compounded the problem.
-
-The root cause is the absence of a media type that carries both resource state and available transitions simultaneously, with embedded schema constraints, discoverable at runtime from the server's response alone.
+- **Architecture inverted from top-down to bottom-up.** v0.2 started
+  with an LLM doing everything and described a future where code would
+  displace it. v0.3 starts from deterministic code and requires
+  inference to justify its presence at each remaining step. Only one
+  step survives that test — see §3.
+- **Three-layer content-addressed resource model formalized** (§2).
+  v0.2 had no caching model beyond ordinary HTTP; hash comparison was
+  described as something the LLM does by string equality, with no
+  layer structure underneath it.
+- **Two dialects, formally specified, including a real, previously
+  wrong shape.** v0.2 assumed one schema-bearing format. v0.3 specifies
+  both HAL-FORMS (Amundsen, `_templates`) and hal-schema-forms (jbadeau,
+  `_forms`) as first-class, negotiated dialects — see §4. The
+  hal-schema-forms shape in earlier working drafts of this project
+  incorrectly used `_templates` for both dialects; confirmed against
+  jbadeau's own published shape, the correct top-level key is `_forms`,
+  with `_links.target.href` nesting and a `schema` object carrying a
+  real `$id`.
+- **URI Templates required for affordance-set targets** (§2.3). An
+  earlier draft resolved a specific bed ID into a set's `target.href`,
+  which silently defeated cross-resource cache sharing — two resources
+  in the same state produced different bytes and different hashes.
+  Targets in a shared affordance-set MUST remain literal, unexpanded
+  templates (`/beds/{bedId}/actions/water-cell`, `templated: true`).
+- **`Prefer: embed=schemas` formally added** (§5), per RFC 7240,
+  as this project's own registered extension token, alongside the
+  RFC's own `return=minimal`/`return=representation`.
+- **Event sourcing specified as the recommended, not mandated, backend
+  pattern** (§8). Necessary for correct point-in-time reconstruction;
+  optional for implementations that don't need history.
+- **§9 (multi-remote guidance) is new.** v0.2 assumed a single server.
+- **§10 (orchestration compression) is new.** Clarifies that bulk
+  affordances and client-side batch planning are the specified
+  mechanisms for N-target operations — no sandboxed code execution
+  required or recommended.
+- **Ambient affordances named as the governing concept** (§1.2).
 
 ---
 
-## 4. Goals
+## 1. Core principles
 
-- Define a media type that carries resource state and affordances as an inseparable unit
-- Define compliant server behaviour that enforces business rules through affordance presence and absence
-- Define compliant client behaviour that enters with a bookmark and discovers everything at runtime
-- Define a hash-based schema fingerprint with a canonical computation procedure
-- Define a hash-based registry that eliminates redundant schema fetches
-- Define the Sync-Reason-Act cycle as the agent's processing model
-- Define the RISE envelope pattern for asynchronous reciprocal interaction
-- Define push and poll callback modes for RISE
-- Define a profile negotiation mechanism that reduces response weight for warm clients
-- Produce a reference implementation — ARTIE — that demonstrates all of the above across two unrelated domains
-- Demonstrate measurable per-turn token cost reduction versus OpenAPI tool calling baseline
-- Demonstrate zero calls to affordances not present in the current manifest
+### 1.1 Domain-agnostic by construction
+
+The client carries no domain-specific knowledge of any server it
+talks to — no field names, endpoint paths, business rules, or valid
+values known in advance. Everything the client knows about what's
+currently possible comes from the most recent response. This is
+unchanged from v0.2 and remains the foundational constraint.
+
+### 1.2 Ambient affordances
+
+The governing concept for this architecture, borrowed and specialized
+from Ned Letcher's usage (Thoughtworks): *structural properties of the
+environment itself that make it legible, navigable, and tractable to
+an agent operating within it.* In this protocol, the specific
+instantiation is: **the set of currently-legal actions is never
+searched for, filtered, or retrieved from a larger catalog — it is
+what the environment ambiently produces, given its current state,
+with nothing more and nothing less ever present to reason over.**
+
+This is the precise property that distinguishes this design from
+tool-search or dynamic-discovery patterns layered onto a static
+catalog (MCP Tool Search, Code Mode's `search` step, etc.): those
+narrow a fixed haystack faster. This protocol never has a haystack —
+only what's ambiently true right now.
+
+### 1.3 Bottom-up, not top-down
+
+Build deterministic code first. Require each remaining unit of
+inference to justify its own presence. In this protocol exactly one
+step survives that requirement — see §3 (Reason). Sync, caching,
+validation, and HTTP mechanics are ordinary code, not LLM-mediated
+reasoning, regardless of how they were prototyped.
 
 ---
 
-## 5. Non-Goals
+## 2. The three-layer resource model
 
-- Retrofitting existing non-compliant APIs
-- Replacing AsyncAPI, OpenAPI, or gRPC in their existing use cases
-- Defining a general purpose agent framework
-- Solving hallucination in the semantic reasoning step — H.E.A.R.T. constrains structural hallucination only
-- Prescribing server implementation technology
-- YAML and Markdown serialisation profiles (deferred to V2)
-- Authentication and authorisation mechanisms
-- Rate limiting and throttling
-- Multi-agent coordination beyond two-party RISE
+Every domain resource is modeled across three layers, separated by
+**how often each layer's content actually changes.**
+
+### 2.1 Layer 1 — Resource (mutable)
+
+Plain HTTP resource. Standard conditional caching applies: server
+issues `ETag`, client sends `If-None-Match`, server replies `304 Not
+Modified` when unchanged. This is the only layer where the same URL
+legitimately returns different bytes over time.
+
+Concurrency: writes MAY require `If-Match` against the current `ETag`
+(or an equivalent sequence token — see §8.2). A mismatch returns `412
+Precondition Failed`.
+
+### 2.2 Layer 2 — Affordance-set (immutable)
+
+The set of actions currently legal, given the resource's current
+state. Named by a hash of its own canonical content, not by the
+resource pointing at it.
+
+```
+GET /beds/2
+→ { "status": "READY_TO_HARVEST",
+    "_links": {
+      "<rel>": {
+        "href": "/affordance-sets/sha256-<hash>",
+        "type": "<negotiated dialect's media type>"
+      } } }
+```
+
+Because the URL is a hash of the content, `Cache-Control: public,
+max-age=31536000, immutable` is a factual statement. Any resource
+reaching the identical state resolves to the identical URL — this is
+the core cross-resource caching guarantee this protocol exists to
+provide, and it MUST hold for any conforming implementation.
+
+**Hash computation MUST exclude anything that resolves per-request.**
+Specifically, target hrefs inside an affordance-set MUST remain
+literal, unexpanded URI Templates (RFC 6570) — see §2.3. An
+implementation that resolves a specific resource ID into the set
+before hashing breaks the cross-resource sharing guarantee and is
+non-conforming.
+
+### 2.3 Layer 3 — Schema (immutable)
+
+Field definitions for one specific action. Same principle, named by a
+hash of its own bytes, independently cacheable and independently
+shareable across every affordance-set that happens to reference an
+identical set of fields.
+
+### 2.4 URI Templates for shareable targets
+
+Within a layer-2 document, every action target MUST be expressed as
+an unresolved URI Template with `templated: true`:
+
+```json
+"target": { "href": "/beds/{bedId}/actions/water-cell", "templated": true }
+```
+
+The client is responsible for local variable substitution before
+issuing the write. This is what makes an affordance-set genuinely
+resource-agnostic: identical bytes serve every resource currently in
+that state, satisfying real HTTP cache semantics with no query
+parameter or resolved-ID variance in the cache key.
+
+A resolved, non-templated href MAY appear only in a response that is
+already scoped to one specific resource and not intended for
+cross-resource sharing (e.g., the collapsed single-response mode in
+§5).
 
 ---
 
-## 6. Protocol Requirements
+## 3. The Sync-Reason-Act cycle
 
-### 6.1 Media Type
+### 3.1 Sync (deterministic)
 
-The H.E.A.R.T. V1 media type is `application/hal+json` with a dual-profile parameter per RFC 6906 and RFC 9110:
+1. Fetch the current resource (bookmark on first turn; the `href` of
+   the last acted-on affordance thereafter).
+2. Negotiate dialect via `Accept` (§4).
+3. Compare the response's layer-2 pointer against the local cache by
+   plain string equality. A hash is opaque — never computed,
+   verified semantically, or reasoned about by the model. This
+   comparison is code, not inference.
+4. Resolve every layer-2 and layer-3 miss via ordinary HTTP fetch,
+   in parallel where independent. **Deduplicate by URL before
+   fanning out concurrent fetches** — two different affordances
+   sharing identical content (and therefore an identical hash) MUST
+   NOT race each other on the same in-flight request. This was a
+   real, found defect in an early implementation and is now a hard
+   requirement, not a suggestion.
+5. Do not proceed to Reason with unresolved misses.
+
+### 3.2 Reason — the one step inference is required to earn
+
+1. Given the fully-resolved, currently-legal affordance set — never
+   anything wider — map the user's stated intent to exactly one
+   `rel`/action name, using its schema as the only signal.
+2. If more than one affordance plausibly matches, or none does, ask
+   rather than guess (unless the session is explicitly configured for
+   autonomous operation, and even then, only within affordances the
+   server has chosen to expose under that mode).
+3. Populate the chosen affordance's fields strictly within schema
+   constraints. Do not fabricate a value the user didn't supply or
+   the current resource state didn't derive.
+4. Output: a single structured selection (`rel` + field values). This
+   is intent classification and slot filling over a schema discovered
+   live, not authored ahead of time.
+
+### 3.3 Act (deterministic)
+
+1. Expand any URI Template locally, using only variables the client
+   already possesses (e.g. the resource ID from the URL it originally
+   synced).
+2. Submit to the resolved `href`, with the concurrency token from
+   Sync attached per §7.1.
+3. Never construct a URI from anything other than an `href` the
+   server provided, current or prior.
+4. On response, restart the cycle at Sync. Act is never terminal.
+
+---
+
+## 4. Dialect negotiation
+
+Two dialects, negotiated via `Accept`:
 
 ```
-application/hal+json; profile="https://github.com/jbadeau/hal-schema-forms https://github.com/jogoshugh/heart-rise"
+Accept: application/hal+json, application/prs.hal-forms+json
+    → "halforms" dialect (Mike Amundsen's HAL-FORMS)
+
+Accept: application/hal+json;profile="https://github.com/jbadeau/hal-schema-forms"
+    → "jsonschema" dialect (jbadeau/hal-schema-forms)
 ```
 
-Multiple profiles SHALL be declared as a space-separated list in a single quoted `profile` parameter. Both profiles MUST be present for a response to be considered H.E.A.R.T. compliant.
+No explicit signal → server defaults to `halforms` (documented
+default: the more universally implementable choice, since a bare HAL
+client already ignores properties it doesn't recognize per HAL's own
+extensibility rules).
 
-**Profile responsibilities.** The two profiles have distinct, non-overlapping concerns:
+Because the two dialects produce genuinely different bytes for the
+same logical affordance, they legitimately resolve to **different**
+layer-2 and layer-3 hashes for the same underlying capability — this
+is correct, not a bug, the same way a JPEG and a PNG of the same photo
+have different content hashes.
 
-- `hal-schema-forms` (base profile) — provides HAL Forms schema semantics, including the `_forms` structure and full JSON Schema field definitions.
-- `heart-rise` (H.E.A.R.T. profile) — layers the hash fingerprint, affordance registry, and Sync-Reason-Act processing model on top of the base.
+### 4.1 HAL-FORMS dialect (halforms)
 
-A conformant H.E.A.R.T. response SHALL contain:
+Reserved property: `_templates`. Real, inline `properties` per
+Amundsen's spec — this is what makes the response render in an
+unmodified HAL-FORMS client with zero further requests. If a
+collection has exactly one member, its key SHOULD be `"default"` per
+the base spec — this is correct, spec-mandated behavior, not
+something to work around.
 
-**Affordance Form.** A discrete unit representing a single available transition, expressed as a HAL Schema Form. SHALL contain:
-- `rel` — semantic relation name identifying the affordance
-- `href` — target URI provided by the server
-- `hash` — fingerprint of the current schema for this affordance, computed per §6.5
-- `_schema` — full JSON Schema document describing the form fields (see Field Schema below)
+**Known implementation hazard, not a protocol defect:** frameworks
+that derive HAL-FORMS `readOnly` from JavaBean-style setter
+inspection (confirmed against a real, open Spring HATEOAS issue) will
+mark a field read-only if the underlying language's immutable-by-default
+value types (e.g. Kotlin `val`) compile without a setter. Request DTOs
+MUST expose mutable properties for every field intended to be
+writable in this dialect.
 
-**Field Schema.** Embedded within each affordance form as a `_schema` object conforming to the HAL Schema Forms specification. The full JSON Schema vocabulary is available — `type`, `enum`, `minimum`, `maximum`, `pattern`, `format`, `description`, `allOf`, `anyOf`, conditional keywords, and any other standard JSON Schema keywords. H.E.A.R.T. does not restrict which keywords a server may use. Clients SHALL treat `_schema` as a standard JSON Schema document.
+### 4.2 hal-schema-forms dialect (jsonschema)
 
-At minimum a conformant field schema SHALL declare:
-- `properties` — JSON Schema properties object mapping field names to their full schema definitions
-- `required` — JSON Schema array listing required field names
+Reserved property: **`_forms`** — not `_templates`. Confirmed directly
+against jbadeau's own published shape:
 
-The structural contract exposed to the hash fingerprint (§6.5) is a normalised subset of the full schema. The full schema governs what the client submits; the fingerprint governs cache invalidation.
-
-**Affordance Manifest.** A collection of affordance forms under the `_forms` key, representing all currently available transitions.
-
-**Resource State.** Domain data representing the current state of the resource, carried in the response body alongside `_forms`.
-
-**Atomic Unit.** Resource state and affordance manifest SHALL be delivered simultaneously in a single response. Delivering them separately is non-compliant.
-
-### 6.2 Compliant Server Behaviour
-
-A H.E.A.R.T. compliant server SHALL:
-
-- Serve resource state and affordance manifest simultaneously in every response
-- Vary the affordance manifest based on current domain state
-- Assign a stable hash fingerprint to every affordance schema, computed per §6.5
-- Reject transitions not present in the current manifest
-- Respond to the `Accept-Profile` header per §6.4
-- Serve hash fingerprints only when `detail=hash` is declared in the profile
-- Serve full embedded schemas when no profile is declared or on cold start
-- Advertise supported profiles via the `Link` header
-
-Business rules SHALL be enforced through affordance presence and absence. An action not present in the current manifest CANNOT be exercised. This is the primary mechanism for structural reliability.
-
-**Error response codes.** A compliant server SHALL use the following status codes:
-
-| Code | Meaning in H.E.A.R.T. context |
-|------|-------------------------------|
-| 403 Forbidden | Affordance exists in the schema vocabulary but business rules prohibit it in the current state. The manifest correctly omits it. |
-| 404 Not Found | The resource no longer exists. |
-| 405 Method Not Allowed | Client used the wrong HTTP method for the given affordance. |
-| 409 Conflict | State machine transition conflict — the resource moved between the client's sync and its act. Client SHOULD re-sync. |
-| 422 Unprocessable Entity | Schema validation failure — required field missing or type mismatch. |
-| 428 Precondition Required | Client attempted a transition using a stale manifest. The manifest hash in the request does not match the current server state. Client SHALL re-sync before retrying. |
-
-### 6.3 Compliant Client Behaviour
-
-A H.E.A.R.T. compliant client SHALL:
-
-- Enter any interaction with a single bookmark URI and no prior domain knowledge
-- Declare the H.E.A.R.T. profile URI on every resource request per §6.4
-- Declare `detail=hash` when the registry contains schemas for known affordances
-- Omit `detail=hash` on cold start to receive full embedded schemas
-- Compare received fingerprints against the local affordance registry
-- Fetch only schemas whose fingerprint is absent from or changed in the registry
-- Reason only over affordances present in the current manifest
-- Populate form fields within the constraints declared by the affordance schema
-- Never construct a URI from prior knowledge
-- On receipt of a 409 or 428, re-sync before retrying the transition
-
-### 6.4 Profile Negotiation
-
-H.E.A.R.T. uses the `Accept-Profile` header per the W3C Content Negotiation by Profile specification. The H.E.A.R.T. profile URI is `https://github.com/jogoshugh/heart-rise`. The base HAL Schema Forms profile URI is `https://github.com/jbadeau/hal-schema-forms`.
-
-Profile negotiation parameters are scoped to the H.E.A.R.T. profile and govern response optimisation behaviour. They have no effect on the HAL Schema Forms base layer.
-
-**Header syntax examples:**
-
-Cold start — full schemas requested:
-```
-Accept-Profile: <https://github.com/jogoshugh/heart-rise>
-```
-
-Warm client — hashes only, autonomous mode:
-```
-Accept-Profile: <https://github.com/jogoshugh/heart-rise>; param:detail=hash; param:behaviour=autonomous
-```
-
-Warm client — hashes only, interactive mode:
-```
-Accept-Profile: <https://github.com/jogoshugh/heart-rise>; param:detail=hash; param:behaviour=interactive
-```
-
-Domain-familiar client — hashes only, known domain vocabulary:
-```
-Accept-Profile: <https://github.com/jogoshugh/heart-rise>; param:detail=hash; param:domain="https://example.org/vocab/farming"
-```
-
-**Profile parameters:**
-
-| Parameter | Values | Effect |
-|-----------|--------|--------|
-| `detail` | `full` (default), `hash` | `hash` suppresses full schema bodies from the manifest; only fingerprints are returned for known affordances |
-| `behaviour` | `interactive` (default), `autonomous` | Signals whether a human is available to clarify ambiguous intent; servers MAY use this to omit affordances requiring disambiguation |
-| `domain` | URI | Declares familiarity with a specific domain vocabulary; servers MAY omit explanatory metadata for known rel names |
-
-**Four profile levels.** All parameters are optional and combinable:
-
-1. **Functional** — `Accept-Profile: <https://github.com/jogoshugh/heart-rise>` — minimum H.E.A.R.T. compliance signal
-2. **Detail** — adds `param:detail=hash` — enables registry-based schema suppression
-3. **Behavioural** — adds `param:behaviour=autonomous` or `interactive` — informs server affordance selection
-4. **Data** — adds `param:domain=<uri>` — enables vocabulary-aware response compression
-
-Graceful degradation SHALL be supported. A request without `Accept-Profile` SHALL receive a full response. A `406 Not Acceptable` SHALL be returned only when the declared profile cannot be honoured.
-
-### 6.5 Hash Canonicalization
-
-A H.E.A.R.T. hash fingerprint is a deterministic identifier for an affordance schema. All compliant implementations MUST use the same procedure to ensure interoperability.
-
-**Algorithm:** SHA-256.
-
-**Input:** A normalised structural fingerprint object derived from the affordance's `_schema`, containing only two keys: `fields` and `required`. `fields` is a map of field name to its declared JSON Schema `type` string, extracted from the `properties` object. `required` is the JSON Schema required array. All other JSON Schema keywords (`description`, `title`, `enum`, `minimum`, `maximum`, `pattern`, `format`, `allOf`, `anyOf`, etc.), the `rel`, `href`, and any server-specific metadata SHALL be excluded from the hash input.
-
-The fingerprint captures structural identity — which fields exist and which are required — not documentation or constraint detail. Two schemas with the same field names, types, and required set produce the same fingerprint regardless of their descriptions or constraints.
-
-**Canonicalization:** JSON Canonicalization Scheme per RFC 8785. This produces a canonical byte sequence from any JSON value by: recursively sorting object keys lexicographically, removing insignificant whitespace, and normalizing string escapes. Implementations SHALL apply RFC 8785 before hashing.
-
-**Output:** Lowercase hexadecimal encoding of the 256-bit digest.
-
-**Example.** Given the full HAL Schema Form `_schema`:
 ```json
 {
-  "type": "object",
-  "description": "Sow seeds into the bed cell",
-  "properties": {
-    "cropType": { "type": "string", "description": "Plant cultivar name" },
-    "seedCount": { "type": "integer", "minimum": 1, "maximum": 100 }
-  },
-  "required": ["cropType", "seedCount"]
+  "_links": { "self": { "href": "..." } },
+  "_forms": {
+    "<name>": {
+      "_links": { "target": { "href": "...", "templated": true } },
+      "method": "POST",
+      "contentType": "application/json",
+      "schema": { "$id": "/schemas/sha256-<hash>" }
+    }
+  }
 }
 ```
 
-The normalised fingerprint input (structural fields and required only):
-```json
-{
-  "fields": { "cropType": "string", "seedCount": "integer" },
-  "required": ["cropType", "seedCount"]
-}
-```
-
-After RFC 8785 canonicalization:
-```
-{"fields":{"cropType":"string","seedCount":"integer"},"required":["cropType","seedCount"]}
-```
-
-The SHA-256 digest of this canonical byte sequence is the fingerprint. A server publishing this schema and a client caching it will always produce the same fingerprint for the same logical schema, regardless of how the surrounding JSON Schema keywords differ between them.
-
-Implementations producing different hashes from the same logical schema are non-compliant.
-
-### 6.6 Affordance Registry
-
-The affordance registry is a client-side store of schema definitions keyed by hash fingerprint.
-
-The registry SHALL:
-
-- Start empty — no schemas are assumed known before first interaction
-- Store a schema keyed by its fingerprint
-- Return null on miss without error
-- Support lightweight presence check without full retrieval
-- Be idempotent on repeated store of the same fingerprint
-- Persist across sessions to maximise caching benefit
-
-The registry SHALL maintain two partitions:
-
-**Schema partition.** Maps fingerprint to full affordance schema. Populated during sync.
-
-**Agent directory.** Maps rel name to agent endpoint URI. Populated from affordances with the `heart:agent` rel (see §7.6). Used by RISE fallback selection.
-
-### 6.7 Sync Behaviour
-
-The sync step is the first step of every Sync-Reason-Act cycle.
-
-The sync step SHALL:
-
-- Compare all fingerprints in the received manifest against the registry schema partition
-- Identify dirty affordances — those whose fingerprint is absent or changed
-- Fetch full schemas for all dirty affordances before reasoning begins
-- Complete with zero additional server requests when all fingerprints are known
-- Complete with zero additional server requests on subsequent sessions when the registry is warm and the server manifest is unchanged
-
-### 6.8 Sync-Reason-Act Cycle
-
-The agent's processing model SHALL follow three steps in sequence:
-
-**Sync.** Fetch the current resource state and manifest. Resolve all dirty affordance schemas. The agent SHALL NOT reason until the manifest is fully resolved.
-
-**Reason.** Map user intent to available affordances using the rel names as semantic anchors. The LLM SHALL operate only on affordances present in the current manifest. When intent is ambiguous or no affordance matches the agent SHALL seek clarification from the user rather than guess.
-
-**Act.** Populate the selected affordance form within the declared schema constraints. Submit to the server-provided href. Receive the next resource state and manifest. Restart the cycle.
-
-**Context window scope.** The H.E.A.R.T. constraint applies to domain knowledge, not to conversation history. The current resource state and manifest SHALL be present in the context window. Conversation history — what the user asked, which transitions were taken — is managed by the agent framework separately from the H.E.A.R.T. manifest. The agent framework is responsible for preventing context rot in the conversation layer; H.E.A.R.T. is responsible for keeping the domain knowledge layer flat and current.
+Note the structural differences from §4.1: the target href is nested
+under `_links.target`, not a flat string; `schema` — not `schemaRef`
+— is the reserved field, and it always carries a real `$id`, per the
+spec's own allowance that `schema` "MAY contain the referenced schema
+or a dynamic subset." Default (no `Prefer`) renders `schema` as
+`{"$id": "..."}` alone — a minimal, spec-legal subset. `Prefer:
+embed=schemas` (§5) expands it to the full body, with the same `$id`
+retained for verification.
 
 ---
 
-## 7. R.I.S.E. Requirements
+## 5. `Prefer: embed=schemas`
 
-R.I.S.E. is a specialisation of H.E.A.R.T. for asynchronous reciprocal interaction. It is not a separate protocol. It extends the H.E.A.R.T. media type with a standard vocabulary of async rel names.
+An RFC 7240 extension token, following the same pattern PostgREST uses
+for its own non-standard preferences. Any token beyond the RFC's own
+`return=minimal`/`return=representation` is legal per the RFC's
+extensibility design; this project registers `embed=schemas` for its
+own use.
 
-### 7.1 Core Principle
+- Absent → pointer-only rendering at whichever layer is being
+  requested (layer-2's `schema.$id` alone, or layer-1's plain pointer
+  to layer-2).
+- Present → the deepest available detail is inlined. At layer-1, this
+  collapses all three layers into one response (the RFC's own
+  "save the round trip" case, extended one hop further); at layer-2,
+  it expands `schema` to the full body.
 
-In a RISE interaction, client and server are roles not identities. The originator begins as client. The recipient begins as server. When the recipient's work is complete the roles reverse. The recipient becomes client. The originator becomes server. The uniform interface applies in both directions.
+Responses honoring this preference MUST include `Preference-Applied:
+embed=schemas` and MUST include `Prefer` in `Vary`, alongside `Accept`
+— both headers now affect representation, and any cache sitting in
+front of this service needs both listed to key correctly.
 
-### 7.2 The RISE Envelope
-
-The RISE envelope is a media type construct carried in the initial request. It is the self-addressed stamped envelope.
-
-The envelope SHALL contain:
-
-- `reply-to` — URI at which the originator will receive the callback (push mode), or omitted in poll mode
-- `callback-mode` — `push` or `poll`; if omitted, `push` is assumed when `reply-to` is present, `poll` when it is absent
-- `template-rel` — semantic relation name of the expected response; SHALL be a rel name discovered from a prior H.E.A.R.T. sync, never from out-of-band knowledge
-- `template-hash` — fingerprint of the template schema, enabling the recipient to check its registry before fetching
-- `template-fields` — list of field names the originator understands
-
-The envelope SHALL embed sufficient information for the recipient to construct a valid callback without any out-of-band schema knowledge.
-
-### 7.3 RISE Request Behaviour
-
-A RISE compliant originator SHALL:
-
-- Construct an envelope from affordances discovered in the current H.E.A.R.T. session
-- Never populate `template-rel` or `template-hash` from out-of-band knowledge
-- Select callback mode based on its deployment environment (see §7.7)
-- Attach the envelope to the outbound request
-- Not block on the response
-
-### 7.4 RISE Recipient Behaviour
-
-A RISE compliant recipient SHALL:
-
-- Acknowledge receipt immediately with 202 Accepted
-- In push mode: include the originator-provided `reply-to` URI in the response body for confirmation
-- In poll mode: include a `Location` header pointing to a polling resource (see §7.7)
-- Perform work asynchronously
-- Check the affordance registry for the envelope's template hash
-- Fetch the template schema only on registry miss
-- Map its domain state onto the declared template fields using rel names as semantic anchors
-- Submit the callback to the reply-to URI (push) or post the result to the polling resource (poll)
-- Never expose its internal domain model in the callback
-
-### 7.5 RISE Rel Name Vocabulary
-
-The core RISE vocabulary is minimal:
-
-- `heart:agent` — identifies an agent endpoint available for async work or fallback; stored in the agent directory partition of the affordance registry
-- `reply-to` — success callback shape
-- `error-reply` — failure callback shape
-- `progress` — optional intermediate status update
-- `heart:result` — polling resource affordance indicating a completed async result is available
-
-Domain-specific rel names SHALL be defined in domain profiles layered on top of the core vocabulary. Domain rel names SHALL NOT be added to the core vocabulary.
-
-### 7.6 RISE Fallback Behaviour
-
-A RISE compliant originator SHALL:
-
-- Define a non-response window after which fallback is triggered
-- Select a fallback recipient from the agent directory partition of the affordance registry (see §6.6)
-- Agents are registered in the directory when a manifest contains affordances with the `heart:agent` rel; the originator SHALL populate its agent directory during the sync step of any H.E.A.R.T. session that returns `heart:agent` affordances
-- Reuse the original envelope unchanged for the fallback request
-- Accept a callback from the fallback recipient in the same declared template shape
-- Record fallback provenance in the result
-
-A fallback recipient is selected from the agent directory by matching `template-rel` — any registered agent that advertises support for the requested rel name is a candidate. If multiple candidates exist, selection is implementation-defined.
-
-### 7.7 RISE Callback Modes
-
-Two callback modes are defined to accommodate environments where the originator cannot expose a reachable endpoint.
-
-**Push mode.** The originator exposes a live endpoint. It populates `reply-to` with that endpoint's URI and sets `callback-mode: push`. The recipient POSTs the result directly to `reply-to` when work is complete. Push mode is preferred when the originator is a server-side process or long-running service.
-
-**Poll mode.** The originator cannot expose a live endpoint (edge, serverless, mobile, browser). It omits `reply-to` and sets `callback-mode: poll`. The recipient's 202 response SHALL include a `Location` header pointing to a polling resource. The polling resource is a standard H.E.A.R.T. resource. The originator polls it using the Sync-Reason-Act cycle. When work is complete, the polling resource's manifest SHALL include a `heart:result` affordance. The originator exercises `heart:result` to retrieve the completed work. The polling resource SHALL remain available for at least the declared non-response window.
-
-Poll interval is not prescribed. The originator SHOULD use exponential backoff. The polling resource SHOULD return a `Retry-After` header as a hint.
-
-### 7.8 Shared Registry
-
-The affordance registry SHALL be shared between H.E.A.R.T. and RISE interactions. A schema cached during a H.E.A.R.T. sync step SHALL be available to RISE envelope processing without re-fetch. A template hash stored by the originator SHALL be discoverable by the recipient if both participants share a registry instance or if the hash has been previously encountered by the recipient.
+**Embedding a layer-1 response collapses cross-resource sharing for
+that response, by design.** This is the documented trade of "one
+round trip" against "shared cache entry" — the same trade a browser
+makes with inline `<style>` versus a linked, cacheable stylesheet.
+Neither is universally correct; the preference exists so the client
+chooses per request.
 
 ---
 
-## 8. Relationship to Prior Art
+## 6. Hash and content-addressing rules
 
-H.E.A.R.T. is distinct from but informed by the following:
-
-**HAL+JSON and HAL Schema Forms.** H.E.A.R.T. is built directly on top of `application/hal+json` and the HAL Schema Forms specification (`https://github.com/jbadeau/hal-schema-forms`). HAL Schema Forms provides the `_forms` structure and full JSON Schema field definitions. H.E.A.R.T. does not replace or extend this layer — it layers on top via the second profile URI in the dual-profile `Content-Type` parameter. H.E.A.R.T.'s additions are: hash-based schema fingerprinting (§6.5), the affordance registry (§6.6), the `Accept-Profile` negotiation mechanism (§6.4), and the Sync-Reason-Act processing model (§6.8). A server already serving HAL Schema Forms responses can evolve toward H.E.A.R.T. compliance by adding `hash` to each form and declaring the second profile URI in its `Content-Type`.
-
-**ALPS (Application-Level Profile Semantics).** H.E.A.R.T. rel names serve a similar purpose to ALPS descriptors — they provide a semantic vocabulary for transitions. H.E.A.R.T. does not require ALPS compliance but does not preclude it. A domain profile MAY reference an ALPS document as its vocabulary definition.
-
-**W3C Content Negotiation by Profile.** H.E.A.R.T. profile negotiation uses the `Accept-Profile` header and parameter syntax as defined in the W3C working draft. H.E.A.R.T. is not a profile of that specification; it uses its header syntax.
-
-**JSON Canonicalization Scheme (RFC 8785).** Used as the canonicalization step in hash computation (§6.5). H.E.A.R.T. does not extend RFC 8785.
-
----
-
-## 9. ARTIE — Reference Client
-
-ARTIE is the reference implementation of a H.E.A.R.T. and RISE compliant client. ARTIE demonstrates that a single generic agent, carrying no domain-specific knowledge, can interact correctly with any H.E.A.R.T. compliant server.
-
-### 9.1 ARTIE Requirements
-
-ARTIE SHALL:
-
-- Enter any H.E.A.R.T. compliant server with a single URI and no prior domain knowledge
-- Execute the Sync-Reason-Act cycle correctly
-- Maintain a persistent affordance registry across sessions
-- Declare the appropriate profile on every request
-- Operate in interactive mode — seeking clarification from the user on ambiguous intent
-- Support RISE envelope construction and callback reception in both push and poll modes
-- Demonstrate correct fallback behaviour on recipient timeout
-- Produce measurable per-turn token cost comparison versus OpenAPI baseline
-
-### 9.2 Reference Domains
-
-ARTIE SHALL be demonstrated against two unrelated domains to prove domain agnosticism:
-
-**Domain A — Agricultural management.** A garden bed cell state machine with affordances that vary by plant lifecycle state. Demonstrates synchronous H.E.A.R.T. interaction and RISE async processing via remote vision agents.
-
-**Domain B — Sports scoring.** A real-time game state machine with affordances that vary by game phase. Demonstrates that the same ARTIE instance, without modification, navigates a completely unrelated domain correctly.
-
-The two domains are chosen for maximum contrast. Their only shared characteristic is H.E.A.R.T. compliance. ARTIE's ability to interact correctly with both from a single bookmark demonstrates the generic interface working as designed.
-
-### 9.3 Simulation Requirements
-
-All protocol behaviour SHALL be demonstrable via in-memory simulation with no external dependencies:
-
-- Simulated server with scripted state machine
-- Scripted intent resolution replacing live LLM calls
-- Simulated async recipients with configurable timeout behaviour
-- Full cycle verification producing correct state transitions
-- Registry cache hit and miss verification
-- Warm registry lean request verification (hashes only, zero schema fetches)
-- Cold start full schema verification
-- Fallback path completion verification (push and poll modes)
+- A hash is a real, computed function of the referenced content's own
+  bytes — never fabricated, never assumed correct without having been
+  computed by deterministic code.
+- A hash is compared by plain string equality only. It is never
+  reasoned about semantically or reconstructed by inference.
+- If a cache is ever keyed by hash **alone**, independent of origin
+  (permitting cross-origin sharing of byte-identical content — a real
+  and legitimate future extension, not required by this version), the
+  fetched bytes MUST be re-hashed and verified against the requested
+  hash before being trusted. Skipping this verification converts a
+  cache into a poisoning vector. The default, required behavior in
+  this version is origin-partitioned caching, which needs no such
+  verification, exactly as ordinary browser HTTP caching already
+  provides for free.
 
 ---
 
-## 10. Success Metrics
+## 7. Error and concurrency semantics
 
-**Per-turn token cost.** Target: 90% reduction versus the baseline. Baseline definition: a complete OpenAPI specification document for the equivalent domain provided in full at every session turn, with all endpoints included. Measurement: tokens consumed per turn from the second turn onward, against an ARTIE interaction using a warm registry (all fingerprints known). The warm registry condition represents the steady-state for any session longer than one turn.
+| Code | Meaning | Client behavior |
+|---|---|---|
+| 403 | Business rules currently prohibit this affordance | Surface to user; do not retry with a similar payload |
+| 404 | Resource gone | Stop; do not reconstruct a URI |
+| 405 | Wrong method | Client bug; surface plainly, do not silently retry with a different method |
+| 409 | Business-rule conflict (e.g. illegal state transition) | Distinct from 412 — do not conflate. Re-sync and inform the user of the actual constraint |
+| 412 | Concurrency conflict (stale write) | Distinct from 409 — a real "someone else wrote first" race, detected by the server's own concurrency token check. Re-sync from scratch; never resubmit the stale act |
+| 422 | Validation failure | Re-check populated fields against the schema just re-fetched; ask the user to correct; never guess a fix |
+| 428 | Stale hash | Evict, re-sync, re-fetch. Never keep the stale entry as a fallback |
 
-**Structural hallucination.** Zero calls to affordances not present in the current manifest. H.E.A.R.T. does not constrain semantic misidentification — the LLM may still select the wrong affordance from the manifest — but it eliminates the class of errors where the agent invokes an endpoint that does not exist or is not currently available.
+### 7.1 Concurrency token
 
-**Server evolution adaptability.** Agent adapts to manifest changes within one sync cycle with zero client code changes.
-
-**Registry efficiency.** Zero schema fetches on second cycle against an unchanged server manifest.
-
-**Domain agnosticism.** ARTIE interacts correctly with both reference domains from bookmark entry with no domain-specific configuration.
-
----
-
-## 11. Out of Scope for V1
-
-- YAML serialisation profile (deferred to V2 as an additional profile URI layered on `application/hal+json`)
-- Markdown serialisation profile (deferred to V2 as an additional profile URI layered on `application/hal+json`)
-- Registry persistence implementation details
-- LLM provider selection
-- Server implementation framework
-- Transport layer below HTTP
-- Authentication and authorisation mechanisms
-- Rate limiting and throttling
-- Multi-agent coordination beyond two-party RISE
+A resource's concurrency token (an `ETag`, or an event-sourced
+sequence number rendered as one — see §8.2) MUST be attached via
+`If-Match` on writes, where the server chooses to require it. A
+mismatch is a `412`, distinct in kind from a `409` — the former means
+"reality moved since you last looked," the latter means "what you're
+asking is not legal from the current state," and a conforming client
+MUST NOT collapse these into one handling path.
 
 ---
 
-## 12. Open Questions
+## 8. Recommended backend pattern: event sourcing
 
-- Registry persistence strategy across sessions and devices
-- Standardisation path for H.E.A.R.T. media type registration with IANA
-- Formal definition of rel name vocabulary governance
-- Versioning strategy for the core media type
-- Whether the `heart:agent` rel and agent directory pattern is sufficient for multi-party RISE or requires a separate discovery mechanism
+Not mandated — a resource backed by simple current-state storage
+still satisfies §2–§7 — but recommended wherever historical or
+point-in-time queries have any value, since it is the only pattern
+that provides them without bolting on a separate audit mechanism
+after the fact.
+
+### 8.1 Shape
+
+- **Aggregate root**: bare identity only. No derivable state stored
+  directly.
+- **Event log**: append-only, one row per state-changing action, each
+  carrying a per-aggregate sequence number.
+- **Snapshot** (optional): a disposable, periodically-recomputed fold
+  result, purely a performance optimization. Deleting it entirely
+  must never change correctness, only the cost of the next read.
+
+### 8.2 Concurrency via sequence number
+
+Appending event *N+1* requires knowing the aggregate's current tip is
+*N*. A real database uniqueness constraint on `(aggregate_id,
+sequence_no)` — not an application-level check-then-write — is what
+actually enforces this; the constraint violation on a losing
+concurrent write is what becomes the `412` in §7.
+
+### 8.3 Point-in-time reconstruction
+
+Current state is `project(empty, all_events)`. State as of any past
+instant is the same fold, applied to `all_events.filter(occurredAt <=
+instant)`. This is not a separate feature — it falls directly out of
+choosing to store events instead of current state, and any
+implementation choosing this pattern gets it for free.
 
 ---
 
-## 13. Architectural Alignment
+## 9. Multi-remote guidance
 
-This protocol suite is explicitly grounded in Roy Fielding's REST constraints as stated in his 2000 dissertation and his 2008 blog post REST APIs Must Be Hypertext-Driven. Every requirement in this document traces to one or more of Fielding's six principles:
+This protocol, as specified, governs a client's interaction with
+**one environment it can discover from within** — a resource whose
+current state ambiently produces its own legal next steps. It does
+not, by itself, resolve which of several **unrelated** remotes to
+engage with in the first place; that is a different epistemic
+situation (there is nothing to discover from, prior to engagement).
 
-- Protocol independence
-- No private protocol extensions
-- Media types as the descriptive effort
-- No fixed resource names or hierarchies
-- No implementation details exposed to clients
-- Entry with bookmark and known media types only
+- **Caching across multiple remotes is safe by default.** Standard
+  HTTP caching already partitions by origin; one client instance
+  serving many remotes needs no special isolation for cache
+  correctness. Per-remote client instances, if used, are a trust or
+  blast-radius decision, not a caching requirement.
+- **If N remotes share a common, discoverable directory resource**,
+  that directory is itself an ordinary resource under this protocol.
+  Selecting among its listed remotes is the same Reason step (§3.2)
+  applied one level up — no separate mechanism required.
+- **If N remotes are genuinely disjoint** — no shared registry, no
+  affiliated organization, nothing to recurse into — resolving which
+  one to engage is out of scope for this protocol. A capability
+  advertisement / agent-discovery layer (e.g. Google's A2A Agent
+  Cards) occupies that adjacent, complementary layer; this protocol
+  and that layer compose but do not overlap.
 
-H.E.A.R.T. and RISE are not an interpretation of these principles. They are a direct implementation of them in the context of agentic AI systems.
+---
+
+## 10. Orchestration compression for N-target operations
+
+Applying one action across many resources does not require, and this
+protocol does not recommend, generating and sandboxing executable
+code at request time. Two specified mechanisms cover this case
+entirely within the existing model:
+
+### 10.1 Server-side bulk affordances
+
+A bulk action is simply an affordance whose schema accepts a
+collection (`{"cellIds": [2, 5, 9], "milliliters": 500}`). It follows
+every rule already specified — discoverable only when legal, content-
+addressed like any other schema, validated the same way. Business
+rules governing what a valid bulk operation even means belong here,
+server-side, where domain logic belongs.
+
+### 10.2 Client-side batch planning
+
+Reason MAY emit a single structured plan spanning multiple targets in
+one pass (`{"affordance": "waterCell", "targets": [2, 5, 9], "params":
+{...}}`); the deterministic client layer executes the fan-out with no
+further Reason invocation per target. This is ordinary slot-filling
+with an array-shaped slot — not a new mechanism, and not a
+justification for introducing a code-generation or sandboxed-execution
+runtime into the client.
+
+---
+
+## 11. Testing discipline
+
+Protocol conformance is verified by an incrementally-grown Gherkin
+feature suite with Kotlin step definitions, exercising the actual
+client and server code paths — not a separate, parallel
+reimplementation of the logic under test. Each defect found through
+real execution gets a permanent, named regression scenario before the
+fix is considered complete. This suite grows with the protocol; it is
+not written once and left static.
+
+---
+
+## 12. Hard prohibitions (carried forward, unchanged)
+
+- Never construct a request URI from anything other than a
+  server-provided `href`.
+- Never act on an affordance absent from the most recently synced
+  manifest.
+- Never carry schema, field names, or business-rule assumptions from
+  one server or domain into another.
+- Never submit a field value the user didn't supply and the current
+  state didn't derive.
+- Never suppress a 403/404/405/409/412/422/428; always surface it per
+  §7.
+- Never treat a hash as anything but an opaque token for equality
+  comparison, except where §6 explicitly requires re-computing one for
+  verification.
