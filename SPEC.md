@@ -20,8 +20,16 @@
 - New **§6.9**: affordance target URIs, the sharing property, and content-addressed hygiene. URI Templates remain **MAY**, per author direction; §6.9 documents what each choice costs, including the confidentiality consequences of concrete hrefs in `public, immutable` bodies.
 - Clarified that `Vary` applies to **Layer 1 only**, now including `Prefer` in the field-list.
 - Corrected the RISE rel-name vocabulary to conform to **RFC 8288** (§7.5); renamed `template-hash` to `template-schema` (§7.2).
-- Flagged `profile` as an **unregistered media-type parameter**, the `forms`/`schema` tokens as unregistered `Prefer` tokens, and the `Accept-Profile` `param:` syntax as non-standard (§6.1, §6.4, §8.6).
+- Flagged `profile` as an **unregistered media-type parameter** and the `forms`/`schema` tokens as unregistered `Prefer` tokens (§6.1, §6.4).
 - Corrected §13: Fielding's six REST **constraints** and the six 2008 **API rules** are different lists. 0.3 conflated them and dropped "no typed resources."
+
+**Amendments in this revision (profile negotiation, aligned to W3C Content Negotiation by Profile, WD 03 July 2026):**
+
+- **Dropped the media-type `profile` parameter entirely (§6.1).** Per connegp §6.1.1, that parameter is reserved for profiles specific to one media type (JSON-LD's expanded/flattened being the working example); `heart-rise` spans two media types and doesn't qualify. Replaced with `Accept-Profile` (request) and `Link: rel="profile"` (response, now normative — §6.2), per connegp's HTTP Headers Functional Profile.
+- **Minted composite profile URIs (§6.1).** connegp's negotiation model is built for *alternatives* (ranked by q-value or profile hierarchy), not for two independent profiles holding simultaneously. Sending `Accept-Profile: <hal-schema-forms>, <heart-rise>` as a pair asks for one-or-the-other, not both-at-once — that isn't what we mean. `heart-rise/hal-schema-forms` and `heart-rise/hal-forms` are now the two atomic, negotiable profile identifiers, each a connegp-style narrower profile of the bare `heart-rise` family URI. This mirrors connegp's own worked example (§7.3.2, GeoDCAT-AP/StatDCAT-AP both profiling DCAT-AP).
+- **Moved `behaviour`/`domain` to `Prefer` tokens (§6.4)**, off the retired `Accept-Profile; param:` syntax, since `Accept-Profile` is reserved for profile URIs and q-values only (connegp §8.2.2) and has no parameter extension point.
+- **Withdrew the overclaiming in 8.6/§13.** Both `Accept-Profile` and response-side `Link: rel="profile"` rest on pre-Recommendation, and in `Accept-Profile`'s case pre-*submission*, foundations (§14) — connegp's own §13.2 lists the response-side header mechanism as a **Feature at Risk**. "Strict Fielding compliance" overstated this; corrected to describe the choice as the best current standards-track option rather than a settled one.
+- **Flagged the `Prefer`/conneg tension (§8.7).** RFC 7240, as connegp §6.1.3 notes, explicitly advises against using `Prefer` for content negotiation — advice we followed for profile selection (hence the move to `Accept-Profile`) but not for the rendering ladder, which is still `Prefer`-based. The asymmetry is now stated rather than left implicit.
 
 **Open editorial questions are marked `[AUTHOR]` inline.**
 
@@ -130,31 +138,52 @@ This has a cost, and the document should be read as accepting it: a manifest tha
 
 ## 6. Protocol Requirements
 
-### 6.1 Media Type and Dialects
+### 6.1 Media Type, Dialects, and Profile Negotiation
 
-H.E.A.R.T. is a layer over a base hypermedia-forms dialect, not a single fixed media type. Two base dialects are recognised, selected by ordinary HTTP content negotiation (`Accept`), never by a H.E.A.R.T.-specific parameter:
+H.E.A.R.T. is a layer over a base hypermedia-forms dialect, not a single fixed media type. Two base dialects are recognised, selected by ordinary HTTP content negotiation (`Accept`). Conformance to the `heart-rise` profile is negotiated **entirely independently of the media type**, using `Accept-Profile` (request) and `Link: rel="profile"` (response), per the W3C *Content Negotiation by Profile* Working Draft, 03 July 2026 (henceforth "connegp"; §6.1.1 and §7).
+
+**Profile identifiers are composite, not conjunctive.** `heart-rise` never stands alone on the wire. It is always layered over exactly one base dialect, and connegp's negotiation model (§7.3.2) is built for a client to request *one profile from a set of alternatives*, ranked by preference — not for two independent profiles to apply to a response simultaneously. Sending `Accept-Profile: <hal-schema-forms>, <heart-rise>` would ask for either one, which is not what's meant. Accordingly, 0.4 mints one atomic profile URI per (dialect, `heart-rise`) pair:
+
+- `https://github.com/jogoshugh/heart-rise/hal-schema-forms`
+- `https://github.com/jogoshugh/heart-rise/hal-forms`
+
+The bare `https://github.com/jogoshugh/heart-rise` URI remains as the family/parent identifier — analogous to connegp's own worked example where GeoDCAT-AP and StatDCAT-AP are each a narrower `prof:Profile` of DCAT-AP without profiling each other (connegp §7.3.2, Example 7; §A.2). It is never sent in `Accept-Profile`, since alone it does not fully constrain a wire format; a server MAY include it alongside the concrete profile in a `Link: rel="profile"` response for hierarchy discoverability.
 
 **HAL Schema Forms dialect** (`https://github.com/jbadeau/hal-schema-forms`):
 ```
-Accept: application/hal+json;profile="https://github.com/jbadeau/hal-schema-forms https://github.com/jogoshugh/heart-rise"
+Accept: application/hal+json
+Accept-Profile: <https://github.com/jogoshugh/heart-rise/hal-schema-forms>
+
+---
+
+HTTP/1.1 200 OK
+Content-Type: application/hal+json
+Link: <https://github.com/jogoshugh/heart-rise/hal-schema-forms>; rel="profile"
 ```
 Uses the `_forms` key. Full JSON Schema per field.
 
 **HAL-FORMS dialect** (Amundsen's `application/prs.hal-forms+json`, the format Spring HATEOAS and other toolchains already ship natively):
 ```
-Accept: application/prs.hal-forms+json;profile="https://github.com/jogoshugh/heart-rise", application/hal+json;q=0.5
+Accept: application/prs.hal-forms+json, application/hal+json;q=0.5
+Accept-Profile: <https://github.com/jogoshugh/heart-rise/hal-forms>
+
+---
+
+HTTP/1.1 200 OK
+Content-Type: application/prs.hal-forms+json
+Link: <https://github.com/jogoshugh/heart-rise/hal-forms>; rel="profile"
 ```
 Uses the `_templates` key. Amundsen's inline `properties` array (`name`, `type`, `required`, `readOnly`, etc.), not JSON Schema.
 
-> **Correction from 0.3.** The previous draft's HAL-FORMS example was `Accept: application/hal+json, application/prs.hal-forms+json; profile="..."`. Media-type parameters bind to the media range they follow, so that header requested the profile for `prs.hal-forms+json` only, and offered bare `hal+json` at equal preference — probably not the intent. The corrected form above states the preference order explicitly with `q`.
+> **Why not a media-type parameter.** connegp §6.1.1 reserves the `profile` media-type parameter for profiles specific to *one* media type (its worked example is JSON-LD's expanded/flattened forms), and records that DXWG and the JSON-LD WG concluded exactly this at TPAC 2018. `heart-rise` spans two unrelated media types, so it does not qualify, and 0.3/early-0.4's `Accept: application/hal+json;profile="..."` was a private extension of a parameter that was never ours to use this way — in tension with §13's "no private protocol extensions." This revision drops it entirely in favour of `Accept-Profile`/`Link: rel="profile"`, connegp's mechanism for media-type-independent profiles.
 
-> **Registration status.** `profile` is **not a registered parameter** of `application/hal+json` or `application/prs.hal-forms+json`. RFC 6906 defines `profile` as a *link relation type*; the media-type parameter of that name is defined for `application/ld+json` specifically. HAL itself (draft-kelly-json-hal) expired without publication and defines no parameters. The syntax above is therefore a private extension, in tension with §13's "no private protocol extensions." Two exits: register the parameter alongside a media type registration (§12), or move dialect selection to distinct media types and drop the parameter. `[AUTHOR]` — which exit?
+> **Standards footing — read before treating any of the above as settled.** This is the best available standards-track mechanism for the problem, not a finished one. connegp itself is a Working Draft, not a Recommendation, and its own §13.2 lists response-side profile signalling via HTTP headers — the exact `Link: rel="profile"` mechanism just made normative below — as a **Feature at Risk**, meaning the W3C group has not committed to it surviving to Recommendation. `Accept-Profile` is in worse shape: connegp §6 (Related Work) states plainly that the header is the subject of a separate IETF Internet-Draft that "has not yet been submitted to the IETF" and is expected to be "completely re-written," and that connegp's own text describing it "should be seen as a work-in-progress until this paragraph is removed." See §14 and §8.6 for the full status, and §12 for what happens to this section if either foundation moves.
 
 A server SHOULD support both dialects for the same resource, generated from one shared source of truth for "which affordances are currently legal" — the two dialects MUST NOT be allowed to drift into disagreeing about that. Dialect is an orthogonal axis to the layering ladder, not a rung above it (§6.10.6).
 
-**`Vary` applies to Layer 1 only.** A server that varies its Layer 1 response by `Accept` or `Prefer` SHALL send `Vary: Accept, Prefer` as applicable. Layer 2 and Layer 3 are content-addressed and therefore have exactly one representation each; they never negotiate, and SHALL NOT send `Vary`. Both dialect and rendering are baked into the bytes, and so into the address (§6.5). Layer 1 `ETag` values SHALL differ across dialects and across rungs, since these are different representations of that resource.
+**`Vary` applies to Layer 1 only.** A server that varies its Layer 1 response by `Accept`, `Prefer`, or `Accept-Profile` SHALL send `Vary: Accept, Prefer, Accept-Profile` as applicable. Layer 2 and Layer 3 are content-addressed and therefore have exactly one representation each; they never negotiate, and SHALL NOT send `Vary`. Dialect, profile, and rendering are all baked into the bytes, and so into the address (§6.5). Layer 1 `ETag` values SHALL differ across dialects and across rungs, since these are different representations of that resource.
 
-**The `heart-rise` profile is dialect-independent.** It never replaces or modifies either base dialect's own structure; it only adds: the three-layer content-addressing model (§6.1, §6.5), `Prefer`-based layering negotiation (§6.4), the conformance ladder (§6.10), and the Sync-Reason-Act processing model (§6.8). A server already serving either base dialect can adopt H.E.A.R.T. compliance incrementally, one rung at a time, without changing its dialect's own wire format.
+**The `heart-rise` profile is dialect-independent in substance, dialect-specific in identifier.** The layering model, content addressing, ladder, and Sync-Reason-Act cycle it adds are one shared set of semantics; connegp's negotiation model is simply what forces that one concept to be exposed as two concrete, negotiable URIs rather than one. It never replaces or modifies either base dialect's own structure; it only adds: the three-layer content-addressing model (§6.1, §6.5), `Prefer`-based layering negotiation (§6.4), the conformance ladder (§6.10), and the Sync-Reason-Act processing model (§6.8). A server already serving either base dialect can adopt H.E.A.R.T. compliance incrementally, one rung at a time, without changing its dialect's own wire format.
 
 A H.E.A.R.T. response is organised into three layers. Whether those layers arrive collapsed into one response or as separately-addressed resources is determined by the client's `Prefer` header (§6.4) and by the rung the server has reached (§6.10):
 
@@ -186,6 +215,7 @@ A H.E.A.R.T. compliant server SHALL:
 - Reject transitions not present in the current affordance set
 - Require and honour `If-Match` on state-changing transitions (§6.3), responding `412` on mismatch and `428` when the precondition is absent
 - Support `Accept`-based dialect negotiation (§6.1) and send `Vary` on Layer 1 per §6.1
+- **Send `Link: <profile-uri>; rel="profile"` on every Layer 1 response, identifying which composite profile (§6.1) was actually served.** This is connegp R.1.2.a and is not optional: without it, a client that sent `Accept-Profile` has no way to confirm what it got, and a client that sent nothing has no way to discover that a profile applies at all. A server MAY additionally list the parent `heart-rise` URI in a second `Link: rel="profile"` for hierarchy discoverability (§6.1).
 - Echo `Preference-Applied` when a `Prefer` token is honoured
 - If serving both dialects, generate both from one shared source of truth for which affordances are currently legal — never two independently-maintained descriptions that could silently disagree
 
@@ -229,9 +259,9 @@ A H.E.A.R.T. compliant client SHALL:
 
 ### 6.4 Content Negotiation
 
-H.E.A.R.T. uses two independent, standard HTTP mechanisms, because dialect choice and layering are orthogonal concerns.
+H.E.A.R.T. uses three independent, standard HTTP mechanisms, one per orthogonal concern: `Accept` for dialect, `Accept-Profile` for `heart-rise` conformance (§6.1), and `Prefer` for layering and for the two behavioural signals below.
 
-**`Accept` selects the dialect (§6.1).**
+**`Accept` selects the dialect (§6.1). `Accept-Profile` selects the `heart-rise` composite profile (§6.1).**
 
 **`Prefer` (RFC 7240) selects the layering — and the default is fully collapsed.**
 
@@ -252,26 +282,26 @@ This is inverted from 0.3, which made the pointer form the default and required 
 
 A server SHALL echo `Preference-Applied` listing the tokens it honoured. A client SHALL treat the absence of a token from `Preference-Applied` as meaning that layer arrived embedded, and SHALL NOT fail on it.
 
-> **Registration status.** `forms` and `schema` are not in IANA's Preferences registry (which holds `respond-async`, `return`, `wait`, `handling`, `depth-noroot`). RFC 7240 permits unregistered preference tokens and requires that a server which does not understand one ignore it — which is precisely the degradation behaviour relied on above — but registration SHOULD accompany media type registration (§12).
+> **Registration status.** `forms`, `schema`, `behaviour`, and `domain` (below) are none of them in IANA's Preferences registry (which holds `respond-async`, `return`, `wait`, `handling`, `depth-noroot`). RFC 7240 permits unregistered preference tokens and requires that a server which does not understand one ignore it — which is precisely the degradation behaviour relied on throughout this section — but registration SHOULD accompany media type registration (§12).
 
 > **Withdrawn: `embed=schemas` and the cache-seeding requirement.** 0.4's earlier draft required clients to seed their HTTP cache from embedded bodies, with content-address verification, because embedding was the opt-in and a client using it would never warm its cache. Under the inverted default this problem dissolves for conforming clients: a client that wants caching sends `forms=cid, schema=cid` and gets ordinary HTTP caching with no bespoke logic at all. Seeding is now permitted but never required, and a client that does seed SHALL still verify the content address over the received bytes before storing (§6.5) — an unverified seed would let a `no-cache` Layer 1 response poison a shared, year-long, immutable cache entry.
 
-**`Accept-Profile`** remains available for the two concerns unrelated to caching or dialect:
+> **Tension with RFC 7240 §2, echoed in connegp §6.1.3.** RFC 7240 states that `Prefer` "is not appropriate for... content negotiation," and connegp's authors cite exactly that language as their reason for routing profile selection through `Accept-Profile` instead. 0.4 follows that advice for `heart-rise` conformance (§6.1) but not here: the rendering ladder is arguably also a content-negotiation choice — it selects which representation of the resource is returned — and it stays on `Prefer`. The distinction offered, not fully settled: profile selection changes *what the client can correctly interpret* and a wrong guess is a hard failure requiring a distinct response (`406`-equivalent), which is what `Accept`/`Accept-Profile` are built for; the ladder is softer — every rung is a valid, self-describing rendering of the same resource, an unhonoured token degrades to a still-usable L0 response rather than an error, and that soft-preference-with-graceful-fallback behaviour is exactly what `Prefer` is specified for. Recorded here rather than resolved, since RFC 7240's advice is explicit and the counter-argument is ours, not the standard's.
+
+**Behaviour and Domain Signalling.** `Accept-Profile` is reserved by connegp for profile URIs and q-values only (§8.2.2); it has no parameter extension point, so the `param:behaviour=...` syntax used in 0.3 was never valid connegp and is withdrawn. These two signals move to `Prefer` tokens instead, alongside the layering tokens above:
 
 ```
-Accept-Profile: <https://github.com/jogoshugh/heart-rise>; param:behaviour=autonomous; param:domain="https://example.org/vocab/farming"
+Prefer: behaviour=autonomous, domain="https://example.org/vocab/farming"
 ```
 
-| Parameter | Values | Effect |
+| Token | Values | Effect |
 |-----------|--------|--------|
 | `behaviour` | `interactive` (default), `autonomous` | Signals whether a human is available to clarify ambiguous intent; servers MAY use this to omit affordances requiring disambiguation |
 | `domain` | URI | Declares familiarity with a specific domain vocabulary; servers MAY omit explanatory metadata for known rel names |
 
-> **Standards status.** W3C *Content Negotiation by Profile* is a Working Draft, not a Recommendation. The `param:` prefix syntax above does not appear in its grammar and is a H.E.A.R.T. invention. `[AUTHOR]` — should these two signals move to `Prefer` tokens (`Prefer: behaviour=autonomous`), consistent with §6.4's other use and resting on a stable RFC? That would leave `Accept-Profile` unused and let §8.6 drop entirely.
-
 Note that `behaviour=autonomous` changes which affordances the server emits, which changes the Layer 2 body, which changes its content address. Two clients differing only in `behaviour` see different Layer 2 URLs. That is correct and self-consistent, but it halves cross-client sharing and should be stated.
 
-Graceful degradation SHALL be supported. A request with no negotiation headers at all SHALL receive a full, collapsed, dialect-defaulted response — this is L0 and is the floor of the system. A `406 Not Acceptable` SHALL be returned only when no acceptable dialect can be produced.
+Graceful degradation SHALL be supported. A request with no negotiation headers at all SHALL receive a full, collapsed, dialect-defaulted response — this is L0 and is the floor of the system. A `406 Not Acceptable` SHALL be returned only when no acceptable dialect can be produced; connegp does not define an analogous failure code for an unsatisfiable `Accept-Profile`, and a server unable to produce any requested profile SHOULD fall back to its default profile per connegp §7.3.2 rather than fail the request.
 
 ### 6.5 Content Addressing
 
@@ -549,18 +579,18 @@ sequenceDiagram
     participant Client
     participant Server
 
-    Client->>Server: GET /beds/2<br/>Accept: application/prs.hal-forms+json
-    Server-->>Client: 200 OK<br/>_templates (HAL-FORMS dialect)
+    Client->>Server: GET /beds/2<br/>Accept: application/prs.hal-forms+json<br/>Accept-Profile: heart-rise/hal-forms
+    Server-->>Client: 200 OK<br/>_templates (HAL-FORMS dialect)<br/>Link: rel="profile"
 
-    Client->>Server: GET /beds/2<br/>Accept: hal+json, profile=hal-schema-forms
-    Server-->>Client: 200 OK<br/>_forms (jsonschema dialect)
+    Client->>Server: GET /beds/2<br/>Accept: application/hal+json<br/>Accept-Profile: heart-rise/hal-schema-forms
+    Server-->>Client: 200 OK<br/>_forms (jsonschema dialect)<br/>Link: rel="profile"
 ```
 
-L5 demonstrates §6.1's central claim: the `heart-rise` profile adds layering and addressing without owning the wire format. The same legality decision — which transitions are available on bed 2 right now — is rendered twice, and the two renderings MUST agree on that decision while agreeing on nothing else about their structure.
+L5 demonstrates §6.1's central claim: the `heart-rise` semantics add layering and addressing without owning the wire format. The same legality decision — which transitions are available on bed 2 right now — is rendered twice, and the two renderings MUST agree on that decision while agreeing on nothing else about their structure.
 
 Because the bytes differ, the addresses differ, and the two dialects never share cache entries. That is correct, not a defect. What would be a defect is the two dialects disagreeing about which affordances are present, which is why §6.2 requires one shared source of truth for legality and why L5 is a conformance demonstration rather than a nicety.
 
-`Vary: Accept` applies to the Layer 1 response only (§6.1).
+`Vary: Accept, Accept-Profile` applies to the Layer 1 response only (§6.1).
 
 #### 6.10.7 L6 — Reasoning (opt-in, never required)
 
@@ -747,11 +777,22 @@ H.E.A.R.T. rel names serve a similar purpose to ALPS descriptors — a semantic 
 
 ### 8.6 W3C Content Negotiation by Profile
 
-`Accept-Profile` remains available for behaviour/domain signalling (§6.4). The specification is a Working Draft, not a Recommendation, and the `param:` syntax used here is not drawn from it. Dialect and layering negotiation, which 0.2 routed through `Accept-Profile`, use plain `Accept` and `Prefer` (§6.4).
+`heart-rise` conformance is negotiated via `Accept-Profile` and `Link: rel="profile"` (§6.1), following the HTTP Headers Functional Profile of the W3C *Content Negotiation by Profile* Working Draft (03 July 2026; "connegp"). This is a real correction, not cosmetic: earlier drafts negotiated `heart-rise` via an unregistered `profile` media-type parameter and a non-standard `Accept-Profile; param:` syntax, both private extensions in tension with §13's "no private protocol extensions" rule. connegp's mechanism is the closest available standards-track answer to media-type-independent profile negotiation, and adopting it is an improvement over inventing our own syntax.
+
+It is not, however, a settled foundation, and the document should not read as though it is:
+
+- **connegp is a W3C Working Draft**, not a Recommendation. Per its own §2 (Conformance) and front matter, "it is inappropriate to cite this document as other than a work in progress," and it "may be updated, replaced, or obsoleted... at any time."
+- **The response-side mechanism is explicitly at risk.** connegp §13.2 lists "Use of HTTP protocol headers for information about which profiles the response's message conforms to" as a named Feature at Risk — meaning the `Link: rel="profile"` requirement just made normative in §6.2 could be dropped from a future revision of connegp without another public review round.
+- **`Accept-Profile` itself is not yet a connegp or IETF artifact.** connegp §6 (Related Work) states that HTTP-header standardisation for profile negotiation is IETF's purview, that a first Internet-Draft [PROF-IETF] "has not yet been submitted to the IETF," and that connegp's own description of it "should be seen as a work-in-progress until this paragraph is removed" from connegp itself. `Accept-Profile` is, at the time of writing, pre-submission.
+- **The composite-profile-URI resolution (§6.1) is a H.E.A.R.T. modelling choice, not something connegp specifies for us.** connegp supplies the profile hierarchy mechanism (narrower profiles of a shared parent, per its GeoDCAT-AP/StatDCAT-AP example) that makes the resolution possible, but the decision to mint `heart-rise/hal-schema-forms` and `heart-rise/hal-forms` as the two negotiable identifiers is ours, and is flagged for confirmation in §12.
+
+None of this is a reason to prefer the withdrawn private-parameter approach — a shaky standard is still a better foundation than no standard, and the direction of travel (both toward Recommendation and toward IETF submission) is the right one to bet on. But the correct framing is "adopted the current best standards-track option, with two of its load-bearing pieces still pre-Recommendation and pre-submission respectively," not "strict compliance" or "clean interoperability" — see §14 for the reference-level status of each piece, and §12 for what changes if connegp drops the Feature at Risk or PROF-IETF is submitted with different header semantics.
 
 ### 8.7 RFC 7240 (Prefer)
 
-Used for the layering ladder (§6.4, §6.10). H.E.A.R.T. does not extend RFC 7240; `forms` and `schema` are unregistered preference tokens, which RFC 7240 permits and which degrade safely — an unhonoured token yields the collapsed L0 rendering, which is exactly the intended fallback — but which SHOULD be registered (§12).
+Used for the layering ladder and the `behaviour`/`domain` signals (§6.4, §6.10). H.E.A.R.T. does not extend RFC 7240; `forms`, `schema`, `behaviour`, and `domain` are unregistered preference tokens, which RFC 7240 permits and which degrade safely — an unhonoured token yields the collapsed L0 rendering or the default behaviour, exactly the intended fallback — but which SHOULD be registered (§12).
+
+Note the asymmetry with §8.6: RFC 7240 itself advises against using `Prefer` for content negotiation, and connegp cites that advice as its reason for routing profile selection through `Accept-Profile` instead. 0.4 follows the advice for dialect and profile selection but not for the rendering ladder, which remains `Prefer`-based. §6.4 records the distinction offered in defense of that choice; it is not drawn from either standard.
 
 ### 8.8 JSON Canonicalization Scheme (RFC 8785)
 
@@ -887,12 +928,13 @@ ARTIE interacts correctly with both reference domains from bookmark entry with n
 
 ## 12. Open Questions
 
-**Resolved or superseded in 0.4:** the `Vary: Accept` cache-key question (dissolved — content-addressed layers do not negotiate, §6.1); registry persistence (it is an ordinary HTTP cache, §6.6); the status of `428` (restored with its RFC 6585 meaning now that acts are conditional, §6.2).
+**Resolved or superseded in 0.4:** the `Vary: Accept` cache-key question (dissolved — content-addressed layers do not negotiate, §6.1); registry persistence (it is an ordinary HTTP cache, §6.6); the status of `428` (restored with its RFC 6585 meaning now that acts are conditional, §6.2); whether `behaviour`/`domain` should move off `Accept-Profile` (resolved — moved to `Prefer` tokens, since `Accept-Profile` has no parameter extension point under connegp, §6.4); the private `profile` media-type parameter (resolved — replaced by `Accept-Profile`/`Link: rel="profile"` per connegp, §6.1).
 
 **Recommended for closure:**
 
 - **Dual affordance-set addresses across rungs (§6.5).** Recommend confirming that L1 and L2 renderings are separately addressed, since the alternative sacrifices the one property content addressing exists to provide. This overturns a stated 0.3 property and needs an explicit decision. `[AUTHOR]`
 - **Digest truncation.** Recommend closing as: full digest in production, truncation permitted only for closed-world demonstration servers (§6.5).
+- **Composite profile URIs (§6.1).** `heart-rise/hal-schema-forms` and `heart-rise/hal-forms` as the two negotiable profile identifiers, with the bare `heart-rise` URI retained as a non-negotiable parent for hierarchy discovery only. This is a H.E.A.R.T. modelling decision layered on top of connegp's mechanism, not something connegp specifies — recommend confirming the naming and the never-sent-alone rule for the parent URI before it propagates further. `[AUTHOR]`
 
 **Genuinely open:**
 
@@ -901,10 +943,10 @@ ARTIE interacts correctly with both reference domains from bookmark entry with n
 - **Explaining absence.** Constraining the candidate set prevents the illegal call but leaves the agent with nothing to say when a user asks *why* they cannot harvest — and models confabulate rather than declining to answer. `409` covers the exercised path, not the unexercised one. Options: an optional `heart:unavailable` block carrying rel names plus human-readable reasons; a separate content-addressed "explanations" resource fetched only on demand; or explicit non-support. The tension is that the first re-inflates the payload the ladder just deflated, and it would need its own rung. `[AUTHOR]` — worth an early decision, because it affects the Layer 2 schema at every rung.
 - Whether RISE poll mode should be defined as a profile over MCP's `io.modelcontextprotocol/tasks` extension rather than as a parallel mechanism (§7.7).
 - The RISE envelope wire binding (§7.2) — blocking for interoperability.
-- Whether `Accept-Profile`'s two signals should move to `Prefer` (§6.4), removing a Working-Draft dependency and a non-standard syntax in one step.
 - Whether core rel names should be full URIs rather than CURIEs (§7.5).
 - Whether the ladder needs a formal advertisement mechanism — a way for a server to declare which rungs it supports without a client probing for them. `Preference-Applied` reveals it reactively, one request at a time; a `heart:conformance` link from the entry point would reveal it up front. The latter is more useful and slightly less hypermedia-pure.
-- IANA registration path: media type(s), the `profile` parameter or its replacement, the `forms` and `schema` preference tokens, and the core link relation types. One workstream, not four.
+- **Tracking connegp and PROF-IETF status (new).** Two foundations §6.1 now depends on are moving targets: connegp's §13.2 Feature at Risk covering response-side `Link: rel="profile"`, and the not-yet-submitted PROF-IETF Internet-Draft covering `Accept-Profile` itself (§8.6). Revisit this section when either publishes — a PROF-IETF submission in particular could change `Accept-Profile`'s syntax out from under §6.1's examples.
+- IANA registration path: media type(s), the `forms`/`schema`/`behaviour`/`domain` preference tokens, the core link relation types, and (pending PROF-IETF's own submission) whatever registry it establishes for profile URIs. One workstream, not several.
 - Formal rel name vocabulary governance; versioning strategy for the core media type.
 - Whether `heart:agent` plus the agent directory suffices for multi-party RISE.
 - **MCP Bridge Specification.** A canonical mapping exposing a H.E.A.R.T. entrypoint through a single generic MCP tool (e.g. `execute_heart_transition`), letting existing MCP hosts navigate H.E.A.R.T. servers without context bloat. More tractable under 2026-07-28's per-request model than under the session model 0.3 assumed.
@@ -923,15 +965,15 @@ This protocol suite is grounded in Roy Fielding's work in two distinct places, w
 | Fielding's rule | Where H.E.A.R.T. addresses it |
 |---|---|
 | A REST API should not be dependent on any single communication protocol | §11 (transport below HTTP out of scope for V1 — a partial answer, not a complete one) |
-| A REST API should not contain any changes to the communication protocols aside from filling out standard extension points | §6.4 (`Prefer`), §6.2 (`If-Match`/`412`) — but see the unregistered `profile` parameter and non-standard `param:` syntax, currently in tension with this rule |
+| A REST API should not contain any changes to the communication protocols aside from filling out standard extension points | §6.4 (`Prefer`), §6.2 (`If-Match`/`412`), §6.1 (`Accept-Profile`/`Link: rel="profile"` per connegp, replacing 0.3's private `profile` media-type parameter). The replacement is a genuine improvement — it fills a standard extension point instead of inventing one — but §8.6 sets out why the point it fills is itself pre-Recommendation and, for `Accept-Profile`, pre-submission; "filling a standard extension point" is not yet the same claim as "resting on a finished standard." |
 | A REST API should spend almost all of its descriptive effort in defining the media type(s) used | §6.1, §6.5, §6.9, §6.10 |
 | A REST API must not define fixed resource names or hierarchies | §6.3, §6.9.1 |
 | A REST API should never have "typed" resources that are significant to the client | §6.8 — the client reasons over rel names, not resource types. *Restored in 0.4; 0.3 dropped this rule and substituted "no implementation details exposed to clients", which is not one of the six.* |
 | A REST API should be entered with no prior knowledge beyond the initial URI and a set of standardised media types | §6.3, §6.10.1, §9.1 |
 
-The last row is where the ladder earns its place architecturally rather than merely practically. L0 is the strongest form of that rule this specification can express: a client that knows nothing — not the layering, not content addressing, not even that `Prefer` exists — sends a bare GET and receives state bound to its currently-legal transitions. Everything above L0 is optimisation for clients that have learned more.
+The last row is where the ladder earns its place architecturally rather than merely practically. L0 is the strongest form of that rule this specification can express: a client that knows nothing — not the layering, not content addressing, not even that `Prefer` or `Accept-Profile` exists — sends a bare GET and receives state bound to its currently-legal transitions. Everything above L0 is optimisation for clients that have learned more.
 
-Two places currently fall short of the 2008 rules and are tracked in §12: the private media-type parameter, and the non-standard `Accept-Profile` parameter syntax.
+0.3 and early 0.4 fell short of the second row through a private media-type parameter and a non-standard `Accept-Profile; param:` syntax; both are withdrawn in this revision (§6.1, §6.4). What remains, and is tracked in §12 rather than claimed as resolved, is that the standard now being filled — connegp — is itself a Working Draft with a named Feature at Risk covering the exact mechanism §6.2 makes normative, and that `Accept-Profile` rests on an Internet-Draft not yet submitted to the IETF (§8.6). Adopting the standards-track option is the correct move regardless; it is not yet the same thing as the second row being fully satisfied against a finished standard.
 
 ---
 
@@ -943,13 +985,9 @@ Two places currently fall short of the 2008 rules and are tracked in §12: the p
 | RFC 9111 | HTTP caching | **Obsoletes RFC 7234**, cited throughout 0.3 |
 | RFC 8246 | `Cache-Control: immutable` | §6.1 |
 | RFC 6585 | `428 Precondition Required` | §6.2 — restored in 0.4 |
-| RFC 7240 | `Prefer`, `Preference-Applied` | §6.4; `forms` and `schema` unregistered |
+| RFC 7240 | `Prefer`, `Preference-Applied` | §6.4; `forms`, `schema`, `behaviour`, `domain` unregistered. §2 advises against `Prefer` for content negotiation — see the §8.7 tension note |
 | RFC 8785 | JSON Canonicalization Scheme | §6.5 |
 | RFC 6570 | URI Templates | §6.9.1, Level 1 |
 | RFC 8288 | Web Linking, link relation types | §7.5 |
-| RFC 6906 | The `profile` link relation | §6.1 — the *relation*, not a media-type parameter |
-| RFC 8941 | Structured Field Values | §7.2, if the envelope binds to a header |
-| draft-kelly-json-hal | HAL | Expired; `application/hal+json` registered |
-| — | HAL-FORMS (`application/prs.hal-forms+json`) | Vendor/personal tree |
-| W3C WD | Content Negotiation by Profile | Working Draft; §6.4, §8.6 |
-| MCP 2026-07-28 | Comparison and bridging | §3.1, §7.7, §8.1, §12 |
+| RFC 6906 | The `profile` link relation | §6.1 — the *relation*, not a media-type parameter; distinct from `Accept-Profile`/PROF-IETF below |
+| RFC 8941 | Structured Fiel
